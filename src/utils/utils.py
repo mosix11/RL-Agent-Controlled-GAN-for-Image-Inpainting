@@ -13,7 +13,6 @@ import requests
 import hashlib
 import tarfile
 import zipfile
-import requests
 
 
 
