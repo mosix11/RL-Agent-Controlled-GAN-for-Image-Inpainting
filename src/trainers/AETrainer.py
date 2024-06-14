@@ -8,43 +8,42 @@ import socket
 import datetime
 from pathlib import Path
 
-from ray import tune
-from ray.train import Checkpoint
-
-
 class AETrainer():
 
     def __init__(self, max_epochs=150, lr:float=1e-4, optimizer_type="adam", use_lr_schduler=False,
-                 run_on_gpu=False, gradient_clip_val=0, do_validation=True, write_summery=True,
-                 outputs_dir:Path = Path('./outputs'), ray_tuner=None):
+                 run_on_gpu=False, do_validation=True, write_summery=True,
+                 outputs_dir:Path = Path('./outputs')):
         
+        specifier_path = Path('AE/')
+        if not outputs_dir.exists:
+            os.mkdir(outputs_dir)
+        outputs_dir = outputs_dir.joinpath(specifier_path)
+        if not outputs_dir.exists():
+            os.mkdir(outputs_dir)
+        self.outputs_dir = outputs_dir
+        
+        self.cpu = nn_utils.get_cpu_device()
+        self.gpu = nn_utils.get_gpu_device()
+        if self.gpu == None and run_on_gpu:
+            raise RuntimeError("""gpu device not found!""")
+        self.run_on_gpu = run_on_gpu
+
         self.max_epochs = max_epochs
-        self.gradient_clip_val = gradient_clip_val
         self.lr = lr
         self.optimizer_type = optimizer_type
         self.use_lr_schduler = use_lr_schduler
         self.do_val = do_validation
-        self.outputs_dir = outputs_dir
-        if not outputs_dir.exists:
-            os.mkdir(outputs_dir)
+
+        self.write_sum = write_summery
+        if self.write_sum:
+            self.writer = SummaryWriter(self.outputs_dir.joinpath('tensorboard/').joinpath(socket.gethostname()+'-'+str(datetime.datetime.now())))
+        
         self.checkpoints_dir = self.outputs_dir.joinpath('checkpoints/')
         if not self.checkpoints_dir.exists():
             os.mkdir(self.checkpoints_dir)
-        self.ray_tuner = ray_tuner
-        if ray_tuner:
-            if not do_validation:
-                raise RuntimeError("In order to use ray tuner the validation step in each epoch should be done")
+       
         
-        self.write_sum = write_summery
-        self.cpu = nn_utils.get_cpu_device()
-        self.gpu = nn_utils.get_gpu_device()
-        
-        if self.gpu == None and run_on_gpu:
-            raise RuntimeError("""gpu device not found!""")
-        self.run_on_gpu = run_on_gpu
-        
-        if self.write_sum:
-            self.writer = SummaryWriter(self.outputs_dir.joinpath('tensorboard/').joinpath(socket.gethostname()+'-'+str(datetime.datetime.now())))
+
 
     def prepare_data(self, data):
         self.train_dataloader = data.get_train_dataloader()
@@ -55,7 +54,6 @@ class AETrainer():
 
     def prepare_batch(self, batch):
         if self.run_on_gpu:
-            # batch = [a.to(self.gpu) for a in batch]
             batch = batch.to(self.gpu)
         return batch
 
@@ -82,23 +80,19 @@ class AETrainer():
         return optim
     
     def configure_lr_scheduler(self, optimizer, state_dict=None):
-        lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=60)
+        lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3)
         if state_dict:
             lr_scheduler.load_state_dict(state_dict, map=self.gpu if self.run_on_gpu else self.cpu)
         return lr_scheduler
         
-    def clip_gradients(self, grad_clip_val, model):
-        params = [p for p in model.parameters() if p.requires_grad]
-        norm = torch.sqrt(sum(torch.sum((p.grad ** 2)) for p in params))
-        if norm > grad_clip_val:
-            for param in params:
-                param.grad[:] *= grad_clip_val / norm
-
-    def fit(self, model, data, checkpoint=None):
+    def fit(self, model, data, resume=False):
         self.prepare_data(data)
-        if checkpoint:
+        if resume:
+            checkpoint = torch.load(
+                self.checkpoints_dir.joinpath('/ckp.pt')
+            )
             self.prepare_model(model, checkpoint['model_state'])
-            self.configure_optimizers(checkpoint['optim_state'])
+            self.optim = self.configure_optimizers(checkpoint['optim_state'])
             self.epoch = checkpoint['epoch']
             if self.use_lr_schduler: self.lr_scheduler = self.configure_lr_scheduler(self.optim, checkpoint['lr_sch_state'])
         else:
@@ -107,12 +101,9 @@ class AETrainer():
             self.epoch = 0
             if self.use_lr_schduler: self.lr_scheduler = self.configure_lr_scheduler(self.optim)
         
-                
-        # self.train_loss_hist = []
-        # self.val_loss_hist = []
         for self.epoch in range(self.max_epochs):
             self.fit_epoch()
-        # self.model.save_plot()
+
         if self.write_sum:
             self.writer.flush()
 
@@ -120,7 +111,9 @@ class AETrainer():
         
 
     def fit_epoch(self):
-        print('#########  Entering Epoch {} #########'.format(self.epoch + 1))
+        print('#########  Starting Epoch {} #########'.format(self.epoch + 1))
+        
+        # ******** Training Part ********
         self.model.train()
         epoch_train_loss = 0.0
         for i, batch in enumerate(self.train_dataloader):
@@ -129,51 +122,54 @@ class AETrainer():
             self.optim.zero_grad()
             with torch.no_grad():
                 loss.backward()
-                if self.gradient_clip_val > 0:
-                    self.clip_gradients(self.gradient_clip_val, self.model)
-
                 self.optim.step()
                 
         if self.write_sum:
                 self.writer.add_scalar('Loss/Train', epoch_train_loss/self.num_train_batches, self.epoch)
                 
-        if self.ray_tuner:
-            path = self.checkpoints_dir.joinpath('/ckp.pt')
-
+                
+        # ******** Saving Checkpoint ********
+        if (self.epoch+1) % 5 == 0:
+            print('Saving chekpoint...\n')
+            path = self.checkpoints_dir.joinpath('ckp.pt')
             torch.save({
                 'model_state': self.model.state_dict(),
                 'optim_state': self.optim.state_dict(),
                 'epoch': self.epoch,
                 'lr_sch_state': self.lr_scheduler.state_dict() if self.use_lr_schduler else None
-            }, path)
-            checkpoint = Checkpoint.from_directory(self.checkpoints_dir)
+            }, path)    
             
-
-
-            
+        # ******** Validation Part ********
         if self.val_dataloader is None or not self.do_val:
             return
         self.model.eval()
         epoch_val_loss = 0.0
-        epoch_val_acc = 0.0
         for i, batch in enumerate(self.val_dataloader):
             with torch.no_grad():
-                loss, acc = self.model.validation_step(self.prepare_batch(batch))
+                loss = self.model.validation_step(self.prepare_batch(batch))
                 epoch_val_loss += loss.detach().cpu().numpy()
-                epoch_val_acc += acc.cpu().numpy()
+                
         
         if self.use_lr_schduler:
             self.lr_scheduler.step(epoch_val_loss/self.num_val_batches)
             print(self.lr_scheduler.get_last_lr())
+            
+            
+        # ******** Writing Summary and Stats to Tensorboard ********
         if self.write_sum:
             self.writer.add_scalar('Loss/Val', epoch_val_loss/self.num_val_batches, self.epoch)
-            self.writer.add_scalar('Acc/Val', epoch_val_acc/self.num_val_batches, self.epoch)
-
-        if self.ray_tuner:
-            self.ray_tuner.report(
-                {'loss': epoch_val_loss/self.num_val_batches, 'accuracy': epoch_val_acc/self.num_val_batches},
-                checkpoint=checkpoint
-            )
-            # self.ray_tuner.report(
-            #     loss=epoch_val_loss/self.num_val_batches, accuracy=epoch_val_acc/self.num_val_batches
-            # )
+            if (self.epoch+1) % 5 == 0:
+                sample_batch = None
+                for i, batch in enumerate(self.val_dataloader):
+                    sample_batch = batch
+                    break
+                sample_reconstructed = self.model.predict(self.prepare_batch(sample_batch)).to(sample_batch.device)
+                # change the range from -1 to 1 to 0 to 1
+                sample_batch = (sample_batch + 1) / 2
+                sample_reconstructed = (sample_reconstructed + 1) / 2
+                combined_images = torch.cat([sample_batch, sample_reconstructed], dim=3)  # dim=3 stacks them horizontally
+                self.writer.add_images('Val Image Reconstruction', combined_images, global_step=0)
+                
+              
+    
+                

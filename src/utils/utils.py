@@ -1,7 +1,10 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import ImageGrid
-
+import torch
+import torchvision.transforms as transforms
+from PIL import Image
+import io
 import pandas 
 import PIL
 import collections
@@ -340,3 +343,22 @@ class Accumulator:
 
     def __getitem__(self, idx):
         return self.data[idx]
+    
+    
+def plot_to_image(figure):
+    """Converts the matplotlib plot specified by 'figure' to a PNG image and
+    returns it. The supplied figure is closed and inaccessible after this call."""
+    # Save the plot to a PNG in memory.
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png')
+    # Closing the figure prevents it from being displayed directly inside
+    # the notebook.
+    plt.close(figure)
+    buf.seek(0)
+    
+    # Use PIL to open the PNG buffer and convert it to a tensor
+    image = Image.open(buf)
+    transform = transforms.ToTensor()
+    image_tensor = transform(image).unsqueeze(0)  # Add batch dimension
+    
+    return image_tensor

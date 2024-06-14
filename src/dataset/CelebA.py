@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -42,7 +43,7 @@ class CelebA():
                  num_workers:int = 1,
                  valset_ratio:float = 0.1,
                  testset_ratio:float = 0.1,
-                 seed:int = None,
+                 seed:int = 11,
                  device=None) -> None:
         
 
@@ -106,3 +107,58 @@ class CelebA():
     def _build_dataloader(self, dataset):
         dataloader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True, pin_memory=True)
         return dataloader
+    
+    
+    def mask_batch(self, batch):
+        masks = self.create_random_mask_batch(self.batch_size)
+        masks = torch.from_numpy(masks).unsqueeze(1).expand_as(batch)
+        return batch * masks
+    
+    def mask_image(self, img):
+        mask = self.create_random_mask()
+        mask = torch.from_numpy(mask).unsqueeze(0).expand_as(img)
+        return img * mask
+    
+    def create_random_mask(self, image_size=(256, 256), mask_min_size=30, mask_max_size=70):
+        img_height, img_width = image_size
+
+        # Central square coordinates
+        x1, y1 = 32, 32
+        x2, y2 = 224, 224
+
+        # Define the random mask size
+        mask_w = np.random.randint(mask_min_size, mask_max_size)
+        mask_h = np.random.randint(mask_min_size, mask_max_size)
+
+        # Randomly select a position within the central square
+        mask_x = np.random.randint(x1, x2 - mask_w)
+        mask_y = np.random.randint(y1, y2 - mask_h)
+
+        # Create the mask for 3 channels
+        mask = np.ones((img_height, img_width), dtype=np.uint8)
+        mask[mask_y:mask_y + mask_h, mask_x:mask_x + mask_w] = 0
+
+        return mask
+    
+    
+    def create_random_mask_batch(self, batch_size, image_size=(256, 256), mask_min_size=30, mask_max_size=70):
+        img_height, img_width = image_size
+        masks = np.ones((batch_size, img_height, img_width), dtype=np.uint8)
+
+        # Central square coordinates
+        x1, y1 = 32, 32
+        x2, y2 = 224, 224
+
+        for i in range(batch_size):
+            # Define the random mask size
+            mask_w = np.random.randint(mask_min_size, mask_max_size)
+            mask_h = np.random.randint(mask_min_size, mask_max_size)
+
+            # Randomly select a position within the central square
+            mask_x = np.random.randint(x1, x2 - mask_w)
+            mask_y = np.random.randint(y1, y2 - mask_h)
+
+            # Apply the mask
+            masks[i, mask_y:mask_y + mask_h, mask_x:mask_x + mask_w] = 0
+
+        return masks

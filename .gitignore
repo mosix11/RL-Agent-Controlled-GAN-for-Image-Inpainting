@@ -6,6 +6,7 @@ weights/
 raytune/
 outputs/
 output/
+backups/
 ###################
 __pycache__/
 
