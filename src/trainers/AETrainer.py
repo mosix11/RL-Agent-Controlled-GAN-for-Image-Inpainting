@@ -46,6 +46,7 @@ class AETrainer():
 
 
     def prepare_data(self, data):
+        
         self.train_dataloader = data.get_train_dataloader()
         self.val_dataloader = data.get_val_dataloader()
         self.num_train_batches = len(self.train_dataloader)
@@ -58,10 +59,10 @@ class AETrainer():
         return batch
 
     def prepare_model(self, model, state_dict=None):
+        if state_dict:
+            model.load_state_dict(state_dict)
         if self.run_on_gpu:
             model.to(self.gpu)
-        if state_dict:
-            model.load_state_dict(state_dict, map=self.gpu if self.run_on_gpu else self.cpu)
         self.model = model
 
     def configure_optimizers(self, state_dict=None):
@@ -76,32 +77,40 @@ class AETrainer():
         else:
             raise RuntimeError("Invalide optimizer type")
         if state_dict:
-            optim.load_state_dict(state_dict, map=self.gpu if self.run_on_gpu else self.cpu)
+            optim.load_state_dict(state_dict)
         return optim
     
     def configure_lr_scheduler(self, optimizer, state_dict=None):
-        lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3)
+        lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
         if state_dict:
-            lr_scheduler.load_state_dict(state_dict, map=self.gpu if self.run_on_gpu else self.cpu)
+            lr_scheduler.load_state_dict(state_dict)
         return lr_scheduler
         
     def fit(self, model, data, resume=False):
         self.prepare_data(data)
         if resume:
-            checkpoint = torch.load(
-                self.checkpoints_dir.joinpath('/ckp.pt')
-            )
-            self.prepare_model(model, checkpoint['model_state'])
-            self.optim = self.configure_optimizers(checkpoint['optim_state'])
-            self.epoch = checkpoint['epoch']
-            if self.use_lr_schduler: self.lr_scheduler = self.configure_lr_scheduler(self.optim, checkpoint['lr_sch_state'])
+            if self.checkpoints_dir.joinpath('ckp.pt').exists():
+                checkpoint = torch.load(
+                    self.checkpoints_dir.joinpath('ckp.pt')
+                )
+                self.prepare_model(model, checkpoint['model_state'])
+                self.optim = self.configure_optimizers(checkpoint['optim_state'])
+                self.epoch = checkpoint['epoch']
+                if self.use_lr_schduler: self.lr_scheduler = self.configure_lr_scheduler(self.optim, checkpoint['lr_sch_state'])
+            else:
+                self.prepare_model(model)
+                self.optim = self.configure_optimizers()
+                self.epoch = 0
+                if self.use_lr_schduler: self.lr_scheduler = self.configure_lr_scheduler(self.optim)                
         else:
             self.prepare_model(model)
             self.optim = self.configure_optimizers()
             self.epoch = 0
             if self.use_lr_schduler: self.lr_scheduler = self.configure_lr_scheduler(self.optim)
         
-        for self.epoch in range(self.max_epochs):
+        
+        self.scaler = torch.cuda.amp.GradScaler()
+        for self.epoch in range(self.epoch, self.max_epochs):
             self.fit_epoch()
 
         if self.write_sum:
@@ -117,15 +126,19 @@ class AETrainer():
         self.model.train()
         epoch_train_loss = 0.0
         for i, batch in enumerate(self.train_dataloader):
-            loss = self.model.training_step(self.prepare_batch(batch))
-            epoch_train_loss += loss.detach().cpu().numpy()
+            
             self.optim.zero_grad()
-            with torch.no_grad():
-                loss.backward()
-                self.optim.step()
+            with torch.cuda.amp.autocast():
+                loss = self.model.training_step(self.prepare_batch(batch))
+            
+            self.scaler.scale(loss).backward()
+            self.scaler.step(self.optim)
+            self.scaler.update()
+            
+            epoch_train_loss += loss.detach().cpu().numpy()
                 
         if self.write_sum:
-                self.writer.add_scalar('Loss/Train', epoch_train_loss/self.num_train_batches, self.epoch)
+                self.writer.add_scalar('Loss/Train', epoch_train_loss/self.num_train_batches, self.epoch+1)
                 
                 
         # ******** Saving Checkpoint ********
@@ -157,7 +170,7 @@ class AETrainer():
             
         # ******** Writing Summary and Stats to Tensorboard ********
         if self.write_sum:
-            self.writer.add_scalar('Loss/Val', epoch_val_loss/self.num_val_batches, self.epoch)
+            self.writer.add_scalar('Loss/Val', epoch_val_loss/self.num_val_batches, self.epoch+1)
             if (self.epoch+1) % 5 == 0:
                 sample_batch = None
                 for i, batch in enumerate(self.val_dataloader):

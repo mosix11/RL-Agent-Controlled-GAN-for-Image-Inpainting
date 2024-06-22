@@ -3,46 +3,21 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 import torchvision
-
-# class Encoder(nn.modules):
-#     def __init__(self) -> None:
-#         super().__init__()
-        
-#     def forward(self, X):
-#         pass
-
-# class Decoder(nn.modules):
-#     def __init__(self) -> None:
-#         super().__init__()
-        
-#     def forward(self, X):
-#         pass
-
-# class AutoEncoder(nn.modules):
-#     def __init__(self) -> None:
-#         super().__init__()
-#         self.encoder = Encoder()
-#         self.decoder = Decoder()
-        
-        
-#     def forward(self, X):
-#         GFV = self.encoder(X)
-#         output = self.decoder(GFV)
-#         return output
         
 class Encoder(nn.Module):
-    def __init__(self, GFV_dim=2048, dropout=0.5) -> None:
+    def __init__(self, GFV_dim=1024, dropout=0.5) -> None:
         super().__init__()
-        self.conv1 = nn.Conv2d(3, 64, kernel_size=4, stride=2, padding=1)  # (256x256x3) -> (128x128x64)
-        self.conv2 = nn.Conv2d(64, 128, kernel_size=4, stride=2, padding=1)  # (128x128x64) -> (64x64x128)
-        self.conv3 = nn.Conv2d(128, 256, kernel_size=4, stride=2, padding=1)  # (64x64x128) -> (32x32x256)
-        self.conv4 = nn.Conv2d(256, 512, kernel_size=4, stride=2, padding=1)  # (32x32x256) -> (16x16x512)
-        self.conv5 = nn.Conv2d(512, 1024, kernel_size=4, stride=2, padding=1)  # (16x16x512) -> (8x8x1024)
-        self.fc = nn.Linear(8 * 8 * 1024, GFV_dim)  # Latent vector
+        self.conv1 = nn.Conv2d(3, 64, kernel_size=4, stride=2, padding=1)  # (128x128x3) -> (64x64x64)
+        self.conv2 = nn.Conv2d(64, 128, kernel_size=4, stride=2, padding=1)  # (64x64x64) -> (32x32x128)
+        self.conv3 = nn.Conv2d(128, 256, kernel_size=4, stride=2, padding=1)  # (32x32x128) -> (16x16x256)
+        self.conv4 = nn.Conv2d(256, 512, kernel_size=4, stride=2, padding=1)  # (16x16x256) -> (8x8x512)
+        self.conv5 = nn.Conv2d(512, 1024, kernel_size=4, stride=2, padding=1)  # (8x18x512) -> (4x4x1024)
+        self.fc = nn.Linear(4 * 4 * 1024, GFV_dim)  # Latent vector
         self.batchnorm1 = nn.BatchNorm2d(64)
         self.batchnorm2 = nn.BatchNorm2d(128)
         self.batchnorm3 = nn.BatchNorm2d(256)
         self.batchnorm4 = nn.BatchNorm2d(512)
+        self.batchnorm_fc = nn.BatchNorm1d(GFV_dim)
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, X):
@@ -54,17 +29,18 @@ class Encoder(nn.Module):
         X = X.view(X.size(0), -1)  # Flatten
         X = self.dropout(X)
         X = self.fc(X)
+        X = self.batchnorm_fc(X)
         return X
 
 class Decoder(nn.Module):
-    def __init__(self, GFV_dim=2048, dropout=0.5) -> None:
+    def __init__(self, GFV_dim=1024, dropout=0.5) -> None:
         super().__init__()
-        self.fc = nn.Linear(GFV_dim, 8 * 8 * 1024)  # Latent vector to 8x8x1024
-        self.deconv1 = nn.ConvTranspose2d(1024, 512, kernel_size=4, stride=2, padding=1)  # (8x8x1024) -> (16x16x512)
-        self.deconv2 = nn.ConvTranspose2d(512, 256, kernel_size=4, stride=2, padding=1)  # (16x16x512) -> (32x32x256)
-        self.deconv3 = nn.ConvTranspose2d(256, 128, kernel_size=4, stride=2, padding=1)  # (32x32x256) -> (64x64x128)
-        self.deconv4 = nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1)  # (64x64x128) -> (128x128x64)
-        self.deconv5 = nn.ConvTranspose2d(64, 3, kernel_size=4, stride=2, padding=1)  # (128x128x64) -> (256x256x3)
+        self.fc = nn.Linear(GFV_dim, 4 * 4 * 1024)  # Latent vector to 4x4x1024
+        self.deconv1 = nn.ConvTranspose2d(1024, 512, kernel_size=4, stride=2, padding=1)  # (4x4x1024) -> (8x8x512)
+        self.deconv2 = nn.ConvTranspose2d(512, 256, kernel_size=4, stride=2, padding=1)  # (8x8x512) -> (16x16x256)
+        self.deconv3 = nn.ConvTranspose2d(256, 128, kernel_size=4, stride=2, padding=1)  # (16x16x256) -> (32x32x128)
+        self.deconv4 = nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1)  # (32x32x128) -> (64x64x64)
+        self.deconv5 = nn.ConvTranspose2d(64, 3, kernel_size=4, stride=2, padding=1)  # (64x64x64) -> (128x128x3)
         self.batchnorm1 = nn.BatchNorm2d(512)
         self.batchnorm2 = nn.BatchNorm2d(256)
         self.batchnorm3 = nn.BatchNorm2d(128)
@@ -73,7 +49,7 @@ class Decoder(nn.Module):
 
     def forward(self, X):
         X = self.fc(X)
-        X = X.view(X.size(0), 1024, 8, 8)  # Reshape
+        X = X.view(X.size(0), 1024, 4, 4)  # Reshape
         X = F.relu(self.batchnorm1(self.deconv1(X)))
         X = F.relu(self.batchnorm2(self.deconv2(X)))
         X = F.relu(self.batchnorm3(self.deconv3(X)))
@@ -82,14 +58,14 @@ class Decoder(nn.Module):
         return X   
     
 class AutoEncoder(nn.Module):
-    def __init__(self, GFV_dim=2048) -> None:
+    def __init__(self, GFV_dim=1024) -> None:
         super().__init__()
         self.GFV_dim = GFV_dim
         self.encoder = Encoder(GFV_dim)
         self.decoder = Decoder(GFV_dim)
         
         self.perceptual_loss = ResNetPerceptualLoss()
-        # self.tv_loss = TVLoss(weight=1e-5)
+        self.tv_loss = TVLoss(weight=1e-5)
         self.mse_loss = nn.MSELoss(reduction='mean')
         
     def forward(self, X):
@@ -105,19 +81,13 @@ class AutoEncoder(nn.Module):
         Y_hat = self(batch)
         return self.loss(Y_hat, batch)
     
-    def loss(self, Y_hat, Y, averaged=True):
-        # print(Y_hat.shape)
-        # print(Y.shape)
-        # Y_hat = Y_hat.reshape((-1, Y_hat.shape[-1]))
-        # Y = Y.reshape((-1,))
+    def loss(self, Y_hat, Y):
         loss_mse = self.mse_loss(Y_hat, Y)
         loss_perceptual = self.perceptual_loss(Y_hat, Y)
-        # loss_tv = self.tv_loss(Y_hat)
-        # loss = loss_mse + 0.1 * loss_perceptual + loss_tv
-        loss = loss_mse + 0.1 * loss_perceptual
+        loss_tv = self.tv_loss(Y_hat)
+        loss = loss_mse + 0.1 * loss_perceptual + loss_tv
+        # loss = loss_mse + 0.1 * loss_perceptual
         return loss
-        # return F.mse_loss(
-        # Y_hat, Y, reduction='mean' if averaged else 'none')
         
     def get_GFV(self, X):
         return self.encoder(X)
@@ -133,7 +103,7 @@ class AutoEncoder(nn.Module):
             elif len(X.shape) == 3:
                 X = X.unsqueeze(0)
                 preds = self(X)
-                return X.squeeze(0)
+                return preds.squeeze(0)
     
     
     
@@ -157,7 +127,7 @@ class PerceptualLoss(nn.Module):
 class ResNetPerceptualLoss(nn.Module):
     def __init__(self, layers=None):
         super(ResNetPerceptualLoss, self).__init__()
-        resnet = torchvision.models.resnet50(pretrained=True)
+        resnet = torchvision.models.resnet50(weights=torchvision.models.ResNet50_Weights.IMAGENET1K_V2)
         self.resnet_layers = nn.ModuleList(list(resnet.children())[:-2]).eval()  # Exclude the last fully connected layer
         for param in self.resnet_layers.parameters():
             param.requires_grad = False
