@@ -11,8 +11,8 @@ import socket
 import datetime
 
 from src.dataset import CelebA
-from src.models import AutoEncoder, LatentGAN
-from src.trainers import AETrainer, GANTrainer
+from src.models import AutoEncoder, LatentGAN, DDPG
+from src.trainers import AETrainer, GANTrainer, RLTrainer
 
 
 if __name__ == '__main__':
@@ -60,7 +60,9 @@ if __name__ == '__main__':
             raise RuntimeError('You have to first train the latent GAN!!')
         AE = torch.load(AE_weights_path)
         lgan = torch.load(lGAN_weights_path)
-        
+        RLPolicy = DDPG(state_dim=1024, action_dim=8, action_value_range=2.6)
+        trainer = RLTrainer(max_episodes=1e6, run_on_gpu=True, do_validation=True)
+        trainer.fit(RLPolicy, lgan, AE, dataset, resume=True)
         
         
     else:

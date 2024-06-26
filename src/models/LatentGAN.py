@@ -160,7 +160,7 @@ class Generator(nn.Module):
 
 
     def forward(self, z):
-        z = z.view(z.size(0), z.size(1), 1, 1) # [B, 16, 1, 1]
+        z = z.view(z.size(0), z.size(1), 1, 1) # [B, 8, 1, 1]
         out=self.l1(z)  # [B, 512, 4, 4]
         out=self.l2(out)   # [B, 256, 5, 5]
         out=self.l3(out)  # [B, 128, 7, 7]

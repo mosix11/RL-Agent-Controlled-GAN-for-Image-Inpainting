@@ -1,238 +1,422 @@
 import torch 
 import torch.nn as nn
 import torch.nn.functional as F
-
+import numpy as np
 import torchvision
+
+# class Actor(nn.Module):
+# 	def __init__(self, state_dim, action_dim, max_action):
+# 		super(Actor, self).__init__()
+
+# 		self.l1 = nn.Linear(state_dim, 400)
+# 		self.l2 = nn.Linear(400, 400)
+# 		self.l3 = nn.Linear(400, 300)
+# 		self.l4 = nn.Linear(300, action_dim)
+  
+# 		self.max_action = max_action
+  
+# 		for m in self.modules():
+# 			if isinstance(m, nn.Linear):
+# 				nn.init.xavier_normal_(m.weight)
+# 				if m.bias is not None:
+# 					nn.init.constant_(m.bias, 0)
+
+	
+# 	def forward(self, x):
+# 		x = F.leaky_relu(self.l1(x))
+# 		x = F.leaky_relu(self.l2(x))
+# 		x = F.tanh(self.l3(x))
+# 		# Scale the value of the actions from [-1, 1] which is the output of tanh to the range [-max_action, max_action]
+# 		# to cover the range of standard normal distributin
+# 		action = self.max_action * F.tanh(self.l4(x)) 
+# 		return action 
+
+
+# class Critic(nn.Module):
+# 	def __init__(self, state_dim, action_dim):
+# 		super(Critic, self).__init__()
+
+# 		self.l1 = nn.Linear(state_dim, 400)
+# 		self.l2 = nn.Linear(400 + action_dim, 300)
+# 		self.l3 = nn.Linear(300, 300)
+# 		self.l4 = nn.Linear(300, 1)
+  
+# 		for m in self.modules():
+# 			if isinstance(m, nn.Linear):
+# 				nn.init.xavier_normal_(m.weight)
+# 				if m.bias is not None:
+# 					nn.init.constant_(m.bias, 0)
+
+
+# 	def forward(self, x, z):
+# 		x = F.relu(self.l1(x))
+# 		x = F.relu(self.l2(torch.cat([x, z], 1)))
+# 		x = self.l3(x)
+# 		q_value = self.l4(x)
+# 		return q_value 
 
 class Actor(nn.Module):
 	def __init__(self, state_dim, action_dim, max_action):
 		super(Actor, self).__init__()
 
 		self.l1 = nn.Linear(state_dim, 400)
-		self.l2 = nn.Linear(400, 400)
-		self.l3 = nn.Linear(400, 300)
+		self.l2 = nn.Linear(400, 300)
+		# self.l3 = nn.Linear(300, 300)
 		self.l4 = nn.Linear(300, action_dim)
 		
 		self.max_action = max_action
+  
+		for m in self.modules():
+			if isinstance(m, nn.Linear):
+				nn.init.xavier_normal_(m.weight)
+				if m.bias is not None:
+					nn.init.constant_(m.bias, 0)
 
-	
-	def forward(self, x):
-		x = F.relu(self.l1(x))
-		x = F.relu(self.l2(x))
-		x = F.relu(self.l3(x))
-		x = self.max_action * torch.tanh(self.l4(x)) 
-		return x 
+
+	def forward(self, state):
+		out = F.relu(self.l1(state))
+		out = F.relu(self.l2(out))
+		# out = F.relu(self.l3(out))
+		action = self.max_action * torch.tanh(self.l4(out)) 
+		return action
 
 
 class Critic(nn.Module):
 	def __init__(self, state_dim, action_dim):
 		super(Critic, self).__init__()
 
-		self.l1 = nn.Linear(state_dim, 400)
-		self.l2 = nn.Linear(400 + action_dim, 300)
-		self.l3_additional = nn.Linear(300, 300)
-		self.l3 = nn.Linear(300, 1)
+		# Q1 architecture
+		self.l1 = nn.Linear(state_dim + action_dim, 400)
+		self.l2 = nn.Linear(400, 300)
+		# self.l3 = nn.Linear(300, 300)
+		self.l4 = nn.Linear(300, 1)
+
+		# Q2 architecture
+		self.l5 = nn.Linear(state_dim + action_dim, 400)
+		self.l6 = nn.Linear(400, 300)
+		# self.l7 = nn.Linear(300, 300)
+		self.l8 = nn.Linear(300, 1)
+  
+		for m in self.modules():
+			if isinstance(m, nn.Linear):
+				nn.init.xavier_normal_(m.weight)
+				if m.bias is not None:
+					nn.init.constant_(m.bias, 0)
 
 
-	def forward(self, x, u):
-		x = F.relu(self.l1(x))
-		x = F.relu(self.l2(torch.cat([x, u], 1)))
-		x = self.l3_additional(x)
-		x = self.l3(x)
-		return x 
+	def forward(self, state, action):
+		sa = torch.cat([state, action], 1)
 
+		out1 = F.relu(self.l1(sa))
+		out1 = F.relu(self.l2(out1))
+		# out1 = F.relu(self.l3(out1))
+		q1 = self.l4(out1)
+
+		out2 = F.relu(self.l5(sa))
+		out2 = F.relu(self.l6(out2))
+		# out2 = F.relu(self.l7(out2))
+		q2 = self.l8(out2)
+		return q1, q2
+
+
+	def Q1(self, state, action):
+		sa = torch.cat([state, action], 1)
+
+		out1 = F.relu(self.l1(sa))
+		out1 = F.relu(self.l2(out1))
+		# out1 = F.relu(self.l3(out1))
+		q1 = self.l4(out1)
+		return q1
 
 
 class DDPG(nn.Module):
-	def __init__(self, state_dim=1024, action_dim=8, action_value_range=20):
+	def __init__(self, state_dim=1024, action_dim=8, discount=0.9, tau=5e-3, policy_noise=0.2, policy_noise_clip=0.5, action_value_range=2.6):
 		super(DDPG, self).__init__()
-		self.actor = Actor(state_dim, action_dim, action_value_range/2)
-		self.actor_target = Actor(state_dim, action_dim, action_value_range/2)
+		self.state_dim = state_dim
+		self.action_dim = action_dim
+		self.discount_factor = discount
+		self.tau = tau
+		self.policy_noise = policy_noise
+		self.policy_noise_clip = policy_noise_clip
+		self.action_value_range = action_value_range
+
+		self.actor = Actor(state_dim, action_dim, action_value_range)
+		self.actor_target = Actor(state_dim, action_dim, action_value_range)
 		self.actor_target.load_state_dict(self.actor.state_dict())
 
 		self.critic = Critic(state_dim, action_dim)
 		self.critic_target = Critic(state_dim, action_dim)
 		self.critic_target.load_state_dict(self.critic.state_dict())	
   
+  
+  
+	def forward(self):
+		pass
+  
+  
+	def C_training_step(self, experience_batch):
+		states, actions, next_states, rewards, dones = experience_batch
+
+		with torch.no_grad():
+			# Select action according to policy and add clipped noise
+			noise = (
+				torch.randn_like(actions) * self.policy_noise
+			).clamp(-self.policy_noise_clip, self.policy_noise_clip)
+			
+			next_action = (
+				self.actor_target(next_states) + noise
+			).clamp(-self.action_value_range, self.action_value_range)
+
+			# Compute the target Q value
+			target_Q1, target_Q2 = self.critic_target(next_states, next_action)
+			target_Q = torch.min(target_Q1, target_Q2)
+			target_Q = rewards.unsqueeze(1) + dones.unsqueeze(1) * self.discount_factor * target_Q
 
 
+		# Get current Q estimates
+		current_Q1, current_Q2 = self.critic(states, actions)
+
+		# Compute critic loss
+		critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(current_Q2, target_Q)
+  
+		return critic_loss
+
+	def A_training_step(self, experience_batch):
+		states, actions, next_states, rewards, dones = experience_batch
+		actor_loss = -self.critic.Q1(states, self.actor(states)).mean()
+		return actor_loss
 
 	def select_action(self, state):
 		return self.actor(state)
 
+	def update_target_networks(self):
+		# Update the frozen target models
+		for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
+			target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
 
-	def train(self, replay_buffer, iterations, batch_size=64, discount=0.99, tau=0.001):
+		for param, target_param in zip(self.actor.parameters(), self.actor_target.parameters()):
+			target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
 
-		for it in range(iterations):
 
-			# Sample replay buffer 
-			x, y, u, r, d = replay_buffer.sample(batch_size)
-			state = torch.FloatTensor(x).to(self.device)
-			action = torch.FloatTensor(u).to(self.device)
-			next_state = torch.FloatTensor(y).to(self.device)
-			done = torch.FloatTensor(1 - d).to(self.device)
-			reward = torch.FloatTensor(r).to(self.device)
+# class DDPG(nn.Module):
+# 	def __init__(self, state_dim=1024, action_dim=8, discount=0.9, tau=5e-3, action_value_range=2.6):
+# 		super(DDPG, self).__init__()
+# 		self.state_dim = state_dim
+# 		self.action_dim = action_dim
+# 		self.discount_factor = discount
+# 		self.tau = tau
+# 		self.action_value_range = action_value_range
+# 		self.actor = Actor(state_dim, action_dim, action_value_range)
+# 		self.actor_target = Actor(state_dim, action_dim, action_value_range)
+# 		self.actor_target.load_state_dict(self.actor.state_dict())
+
+# 		self.critic = Critic(state_dim, action_dim)
+# 		self.critic_target = Critic(state_dim, action_dim)
+# 		self.critic_target.load_state_dict(self.critic.state_dict())	
+  
+  
+  
+# 	def forward(self):
+# 		pass
+  
+  
+# 	def C_training_step(self, experience_batch):
+# 		states, actions, next_states, rewards, dones = experience_batch
+# 		# Compute the target Q value
+# 		target_Q = self.critic_target(next_states, self.actor_target(next_states))
+# 		target_Q = rewards.unsqueeze(1) + (dones.unsqueeze(1) * self.discount_factor * target_Q).detach()
+		
+#   		# Get current Q estimate
+# 		current_Q = self.critic(states, actions)
+  
+# 		# Compute critic loss
+# 		critic_loss = F.mse_loss(current_Q, target_Q)
+
+# 		return critic_loss
+
+# 	def A_training_step(self, experience_batch):
+# 		states, actions, next_states, rewards, dones = experience_batch
+# 		actor_loss = -self.critic(states, self.actor(states)).mean()
+# 		return actor_loss
+
+# 	def select_action(self, state):
+# 		return self.actor(state)
+
+# 	def update_target_networks(self):
+# 		# Update the frozen target models
+# 		for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
+# 			target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
+
+# 		for param, target_param in zip(self.actor.parameters(), self.actor_target.parameters()):
+# 			target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
+
+	# def train(self, replay_buffer, iterations=1):
+
+		# for it in range(iterations):
+
+		# 	# Sample replay buffer 
+		# 	x, y, u, r, d = replay_buffer.sample(batch_size)
+		# 	state = torch.FloatTensor(x).to(self.device)
+		# 	action = torch.FloatTensor(u).to(self.device)
+		# 	next_state = torch.FloatTensor(y).to(self.device)
+		# 	done = torch.FloatTensor(1 - d).to(self.device)
+		# 	reward = torch.FloatTensor(r).to(self.device)
 			
-			# Compute the target Q value
-			target_Q = self.critic_target(next_state, self.actor_target(next_state))
-			target_Q = reward + (done * discount * target_Q).detach()
+		# 	# Compute the target Q value
+		# 	target_Q = self.critic_target(next_state, self.actor_target(next_state))
+		# 	target_Q = reward + (done * discount * target_Q).detach()
 
-			# Get current Q estimate
-			current_Q = self.critic(state, action)
+		# 	# Get current Q estimate
+		# 	current_Q = self.critic(state, action)
 
-			# Compute critic loss
-			critic_loss = F.mse_loss(current_Q, target_Q)
+		# 	# Compute critic loss
+		# 	critic_loss = F.mse_loss(current_Q, target_Q)
 
-			# Optimize the critic
-			self.critic_optimizer.zero_grad()
-			critic_loss.backward()
-			self.critic_optimizer.step()
+		# 	# Optimize the critic
+		# 	self.critic_optimizer.zero_grad()
+		# 	critic_loss.backward()
+		# 	self.critic_optimizer.step()
 
-			# Compute actor loss
-			actor_loss = -self.critic(state, self.actor(state)).mean()
+		# 	# Compute actor loss
+		# 	actor_loss = -self.critic(state, self.actor(state)).mean()
 			
-			# Optimize the actor 
-			self.actor_optimizer.zero_grad()
-			actor_loss.backward()
-			self.actor_optimizer.step()
+		# 	# Optimize the actor 
+		# 	self.actor_optimizer.zero_grad()
+		# 	actor_loss.backward()
+		# 	self.actor_optimizer.step()
 
-			# Update the frozen target models
-			for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
-				target_param.data.copy_(tau * param.data + (1 - tau) * target_param.data)
+		# 	# Update the frozen target models
+		# 	for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
+		# 		target_param.data.copy_(tau * param.data + (1 - tau) * target_param.data)
 
-			for param, target_param in zip(self.actor.parameters(), self.actor_target.parameters()):
-				target_param.data.copy_(tau * param.data + (1 - tau) * target_param.data)
+		# 	for param, target_param in zip(self.actor.parameters(), self.actor_target.parameters()):
+		# 		target_param.data.copy_(tau * param.data + (1 - tau) * target_param.data)
 
 
 class Environment(nn.Module):
-    def __init__(self, GAN, AE, attempts=5):
+    def __init__(self, GAN, AE, action_dim=8, state_dim=4, attempts=5):
         super(Environment,self).__init__()
+        self.action_dim = action_dim
+        self.state_dim = state_dim
+        self.attempts = attempts
         
-        self.nll_loss = nn.NLLLoss()
         self.mse_loss = nn.MSELoss()
-
-        # self.norm = Norm(dims=args.z_dim)
-        # self.chamfer = ChamferLoss(args)
         
         self.GAN = GAN
         self.AE = AE
 
-        self.j = 1
-        self.attempts = attempts
-        self.end = time.time()
-        self.batch_time = AverageMeter()
-        self.lossess = AverageMeter()
-        self.attempt_id =0
-        self.state_prev = np.zeros([4,])
-        self.iter = 0
-        
-    
-    def reset(self):
-        self.j = 1
-        self.i = 0
-
 
     def get_state(self, batch):
         with torch.no_grad():
-            GFV = self.AE.encoder(batch)
+            GFV = self.AE.get_GFV(batch)
         return GFV
     
     
-    def forward(self, input, action):
+    # def forward(self, state, action):
+    #     with torch.no_grad():
+            
+    #         # The state is the GFV of masked image or in other words noisy GFV
+    #         GFV_noisy_real = state
+    #         recons_noisy_real = self.AE.decode_GFV(GFV_noisy_real)
+            
+    #         # Chosen action by the agent is the latent vector input to the generator
+    #         GFV_clean_fake = self.GAN.generator(action)
+
+    #         # Discriminator Output
+    #         disc_fake = self.GAN.discriminator(GFV_clean_fake)
+            
+    #         # Reconstructing the fake output
+    #         recons_clean_fake = self.AE.decode_GFV(GFV_clean_fake)
+
+
+    #     # Discriminator Loss
+    #     loss_D = torch.mean(disc_fake)
+
+    #     # Loss Between Noisy GFV and Clean GFV
+    #     loss_GFV = self.mse_loss(GFV_clean_fake, GFV_noisy_real)
+
+    #     # Norm Loss
+    #     loss_norm = torch.norm(action)
+
+    #     # Images loss
+    #     loss_img_recon = self.AE.loss(recons_clean_fake, recons_noisy_real)
+
+
+    #     reward_D = loss_D
+    #     reward_GFV = -loss_GFV
+    #     reward_img_recon = -loss_img_recon
+    #     reward_norm = -loss_norm
+    #     # Reward Formulation
+    #     reward =  reward_D *0.01 + reward_GFV * 10.0 + reward_img_recon *100.0 + reward_norm*1/10
+
+    #     done = True
+    #     next_state = GFV_clean_fake
+    #     return next_state, reward, done
+
+
+
+    def forward(self, state, action, gt_imgs=None):
+        if gt_imgs == None:
+            return self.eval_forward(state, action)
+        else:
+            return self.train_forward(state, action, gt_imgs)
+    
+    
+    def train_forward(self, state, action, gt_img):
         with torch.no_grad():
-            # Encoder Input
-            input = input.cuda(async=True)
-            input_var = Variable(input, requires_grad=True)
-
-            # Encoder  output
-            encoder_out = self.model_encoder(input_var, )
-
-            # D Decoder Output
-#            pc_1, pc_2, pc_3 = self.model_decoder(encoder_out)
-            pc_1 = self.model_decoder(encoder_out)
-            # Generator Input
-            z = Variable(action, requires_grad=True).cuda()
-
-            # Generator Output
-            out_GD, _ = self.model_G(z)
-            out_G = torch.squeeze(out_GD, dim=1)
-            out_G = out_G.contiguous().view(-1, args.state_dim)
+            
+            # The GFV of ground truth images (with no mask)
+            GFV_real = self.AE.get_GFV(gt_img)
+            
+            # The state is the GFV of masked image or in other words noisy GFV
+            GFV_noisy_real = state
+            # recons_noisy_real = self.AE.decode_GFV(GFV_noisy_real)
+            
+            # Chosen action by the agent is the latent vector input to the generator
+            GFV_clean_fake = self.GAN.generator(action)
 
             # Discriminator Output
-            #out_D, _ = self.model_D(encoder_out.view(-1,1,32,32))
-        #    out_D, _ = self.model_D(encoder_out.view(-1, 1, 1,args.state_dim)) # TODO Alert major mistake
-            out_D, _ = self.model_D(out_GD) # TODO Alert major mistake
-
-            # H Decoder Output
-#            pc_1_G, pc_2_G, pc_3_G = self.model_decoder(out_G)
-            pc_1_G = self.model_decoder(out_G)
-
-
-            # Preprocesing of Input PC and Predicted PC for Visdom
-            trans_input = torch.squeeze(input_var, dim=1)
-            trans_input = torch.transpose(trans_input, 1, 2)
-            trans_input_temp = trans_input[0, :, :]
-            pc_1_temp = pc_1[0, :, :] # D Decoder PC
-            pc_1_G_temp = pc_1_G[0, :, :] # H Decoder PC
+            disc_fake = self.GAN.discriminator(GFV_clean_fake)
+            
+            # Reconstructing the fake output
+            recons_clean_fake = self.AE.decode_GFV(GFV_clean_fake)
 
 
         # Discriminator Loss
-        loss_D = self.nll(out_D)
+        loss_D = torch.mean(disc_fake)
 
         # Loss Between Noisy GFV and Clean GFV
-        loss_GFV = self.mse(out_G, encoder_out)
+        # Y^ is the GFV generated by the action of RL as the input of GAN 
+        # Y is the GFV of ground truth unmasked images generated by AE encoder
+        loss_GFV = self.mse_loss(GFV_clean_fake, GFV_real)
 
         # Norm Loss
-        loss_norm = self.norm(z)
+        loss_norm = torch.norm(action)
 
-        # Chamfer loss
-        loss_chamfer = self.chamfer(pc_1_G, pc_1)  # #self.chamfer(pc_1_G, trans_input) instantaneous loss of batch items
+        # Images loss
+        # Y^ is the reconstruction of the GFV generated by GAN as the input to AE decoder
+        # Y is the ground truth unmasked images
+        loss_img_recon = self.AE.loss(recons_clean_fake, gt_img)
 
-        # States Formulation
-        state_curr = np.array([loss_D.cpu().data.numpy(), loss_GFV.cpu().data.numpy()
-                                  , loss_chamfer.cpu().data.numpy(), loss_norm.cpu().data.numpy()])
-      #  state_prev = self.state_prev
 
-        reward_D = state_curr[0]#state_curr[0] - self.state_prev[0]
-        reward_GFV =-state_curr[1]# -state_curr[1] + self.state_prev[1]
-        reward_chamfer = -state_curr[2]#-state_curr[2] + self.state_prev[2]
-        reward_norm =-state_curr[3] # - state_curr[3] + self.state_prev[3]
+        reward_D = loss_D
+        reward_GFV = -loss_GFV
+        reward_img_recon = -loss_img_recon
+        reward_norm = -loss_norm
         # Reward Formulation
-        reward = ( reward_D *0.01 + reward_GFV * 10.0 + reward_chamfer *100.0 + reward_norm*1/10)#( reward_D + reward_GFV * 10.0 + reward_chamfer *100 + reward_norm*0.002) #reward_GFV + reward_chamfer + reward_D * (1/30)  TODO reward_D *0.002 + reward_GFV * 10.0 + reward_chamfer *100 + reward_norm  ( reward_D *0.2 + reward_GFV * 100.0 + reward_chamfer *100 + reward_norm)
-      #  reward = reward * 100
-     #   self.state_prev = state_curr
-
-        #self.lossess.update(loss_chamfer.item(), input.size(0))  # loss and batch size as input
-
-        # measured elapsed time
-        self.batch_time.update(time.time() - self.end)
-        self.end = time.time()
-
-       # if i % args.print_freq == 0 :
-
-      #  if self.j <= 5:
-        visuals = OrderedDict(
-            [('Input_pc', trans_input_temp.detach().cpu().numpy()),
-             ('AE Predicted_pc', pc_1_temp.detach().cpu().numpy()),
-             ('GAN Generated_pc', pc_1_G_temp.detach().cpu().numpy())])
-        if render==True and self.j <= self.figures:
-         vis_Valida[self.j].display_current_results(visuals, self.epoch, self.i)
-         self.j += 1
-
-        if disp:
-            print('[{4}][{0}/{1}]\t Reward: {2}\t States: {3}'.format(self.i, self.epoch_size,reward,state_curr,self.iter))
-            self.i += 1
-            if(self.i>=self.epoch_size):
-                self.i=0
-                self.iter +=1
-
-
-      #  errors = OrderedDict([('loss', loss_chamfer.item())])  # plotting average loss
-     #   vis_Valid.plot_current_errors(self.epoch, float(i) / self.epoch_size, args, errors)
-        # if self.attempt_id ==self.attempts:
-        #     done = True
-        # else :
-        #     done = False
+        # reward =  reward_D * 0.1 + reward_GFV * 5.0 + reward_img_recon * 5.0 + reward_norm * 0.1
+        # reward =  reward_D * 0.01 + reward_GFV * .5 + reward_img_recon * .5 + reward_norm * 0.01
+        reward = reward_GFV
+        
+        losses = [loss_D, loss_GFV, loss_norm, loss_img_recon]
         done = True
-        state = out_G.detach().cpu().data.numpy().squeeze()
-        return state, _, reward, done, self.lossess.avg
+        next_state = GFV_clean_fake
+        return next_state, reward, done , losses
+    
+    def eval_forward(self, state, action):
+        with torch.no_grad():
+            GFV_noisy_real = state
+            GFV_clean_fake = self.GAN.generator(action)
+            
+        next_state = GFV_clean_fake
+        return next_state, None, True

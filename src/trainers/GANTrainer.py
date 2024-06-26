@@ -97,8 +97,8 @@ class GANTrainer():
             self.epoch = 0
 
         
-        self.scaler_G = torch.cuda.amp.GradScaler()
-        self.scaler_D = torch.cuda.amp.GradScaler()
+        # self.scaler_G = torch.cuda.amp.GradScaler()
+        # self.scaler_D = torch.cuda.amp.GradScaler()
         for self.epoch in range(self.epoch, self.max_epochs):
             self.fit_epoch()
             
