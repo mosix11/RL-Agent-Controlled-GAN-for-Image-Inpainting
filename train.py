@@ -31,6 +31,7 @@ if __name__ == '__main__':
         os.mkdir(saving_dir)
     AE_weights_path = saving_dir.joinpath(Path('AE.pt'))
     lGAN_weights_path = saving_dir.joinpath(Path('lGAN.pt'))
+    RL_Agent_weights_path = saving_dir.joinpath(Path('RL.pt'))
     
     if args.model == 'AE':
         dataset = CelebA(root_dir=Path('./data').absolute(), batch_size=64, num_workers=2)
@@ -63,6 +64,7 @@ if __name__ == '__main__':
         RLPolicy = DDPG(state_dim=1024, action_dim=8, action_value_range=2.6)
         trainer = RLTrainer(max_episodes=1e6, run_on_gpu=True, do_validation=True)
         trainer.fit(RLPolicy, lgan, AE, dataset, resume=True)
+        torch.save(RLPolicy, RL_Agent_weights_path)
         
         
     else:

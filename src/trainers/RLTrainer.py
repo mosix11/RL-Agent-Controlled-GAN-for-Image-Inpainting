@@ -22,11 +22,13 @@ class RLTrainer():
                  state_dim=1024,
                  action_dim=8,
                  policy_training_batch_size=100,
-                #  lr_A=1e-4, lr_C=1e-2,
+                #  lr_A=1e-3, lr_C=1e-3,   
+                 lr_A=1e-4, lr_C=1e-4,
                 #  lr_A=1e-5, lr_C=1e-4,
                 #  lr_A=3e-4, lr_C=3e-4,
-                 lr_A=3e-4, lr_C=3e-4,
-                 initial_exploration_episodes=2e4,
+                #  lr_A=3e-4, lr_C=3e-4,
+                #  initial_exploration_episodes=2e4,
+                 initial_exploration_episodes=2000,
                  evaluation_freq=5e3,
                  exploration_noise=0.1,
                  target_policy_updt_freq=2,
@@ -35,7 +37,7 @@ class RLTrainer():
                  write_summery=True,
                  log_frequency=5e2,
                  outputs_dir:Path = Path('./outputs')) -> None:
-        
+
         specifier_path = Path('RL/')
         if not outputs_dir.exists:
             os.mkdir(outputs_dir)
@@ -108,13 +110,6 @@ class RLTrainer():
         
     def add_experience(self, observation, action, next_observation, reward, done):
         
-        
-        # print('obs : ', type(observation), observation.shape)
-        # print('act : ', type(action), action.shape)
-        # print('rwrd : ', type(reward), reward)
-        # print('nxt_obs : ', type(next_observation), next_observation.shape)
-        # print('done : ', type(done), done)
-
         with self.rb_client.trajectory_writer(num_keep_alive_refs=1) as writer:
             writer.append({
                 'obs': observation,
@@ -265,15 +260,16 @@ class RLTrainer():
             action = torch.FloatTensor(masked_input_batch.shape[0], self.action_dim).uniform_(-self.DDPG.action_value_range, self.DDPG.action_value_range).to(masked_input_batch.device)
             if self.current_episode == 0: print('\n\n******* Starting Initial Random Exploration Phase *******\n\n')
             elif self.current_episode == self.initial_exploration_episodes - 1 : print('\n\n******* Ending Initial Random Exploration Phase *******\n\n')
-                
+        
         else:
             if self.current_episode == self.initial_exploration_episodes : print('\n\n******* From Now on, Actions Are Taken From Policy *******\n\n')
             action = self.DDPG.select_action(current_state)
             if self.exploration_noise != 0:
                 action = (action + torch.randn(action.shape, device=action.device)* self.exploration_noise).clamp(-self.DDPG.action_value_range, self.DDPG.action_value_range)
         
-            
+        
         next_state, reward, done, losses = self.env(current_state, action, gt_input_batch)
+        
         
         if (self.current_episode+1) % self.log_frequency == 0:
             self.writer.add_scalar('Reward --> Maximize', reward.detach().cpu().numpy(), self.current_episode)
@@ -281,9 +277,7 @@ class RLTrainer():
             self.writer.add_scalar('Loss/GFV --> Minimize', losses[1].detach().cpu().numpy(), self.current_episode)
             self.writer.add_scalar('Loss/Action Norm --> Minimize', losses[2].detach().cpu().numpy(), self.current_episode)
             self.writer.add_scalar('Loss/Image Reconstruction --> Minimize', losses[3].detach().cpu().numpy(), self.current_episode)
-        # if (self.current_episode+1) % 200 == 0:
-        #     print(reward)
-        #     print(torch.std_mean(action), action)
+        
             
         
         self.add_experience(current_state.detach().cpu().squeeze(0).numpy(),
@@ -291,8 +285,9 @@ class RLTrainer():
                             next_state.detach().cpu().squeeze(0).numpy(),
                             reward.detach().cpu().numpy(),
                             done)
-        
-
+            
+        if (self.current_episode+1) % 1000 == 0:
+            print(action)
             
         if (self.current_episode+1) % 20000 == 0:
             print('******* Checkpointing Replay Buffer Experiences *******')
@@ -308,16 +303,22 @@ class RLTrainer():
             self.optim_C.zero_grad()
             critic_loss.backward()
             self.optim_C.step()
+
+            actor_loss = self.DDPG.A_training_step(experience_batch)
+
+            self.optim_A.zero_grad()
+            actor_loss.backward()
+            self.optim_A.step()
+                   
             
-            
-            if (self.current_episode + 1) % self.target_policy_updt_freq == 0:
-                actor_loss = self.DDPG.A_training_step(experience_batch)
+            # if (self.current_episode + 1) % self.target_policy_updt_freq == 0:
+            #     actor_loss = self.DDPG.A_training_step(experience_batch)
     
-                self.optim_A.zero_grad()
-                actor_loss.backward()
-                self.optim_A.step()
+            #     self.optim_A.zero_grad()
+            #     actor_loss.backward()
+            #     self.optim_A.step()
                 
-                self.DDPG.update_target_networks()
+            #     self.DDPG.update_target_networks()
             
             if self.write_sum and (self.current_episode + 1) % self.log_frequency == 0:
                 self.writer.add_scalar('Loss/Actor', actor_loss.detach().cpu().numpy(), self.current_episode)
@@ -341,20 +342,23 @@ class RLTrainer():
             gt_input_batch, masked_input_batch = self.get_val_batch()
             masked_input_batch = gt_input_batch
             
-            # Convert the masked image to GFV
-            current_state = self.env.get_state(masked_input_batch)
-            done = False
-            
-            while not done:
-            # Action By Agent and collect reward
-                action = self.DDPG.select_action(current_state)
-                next_state, reward, done = self.env(current_state, action)
+            with torch.no_grad():
+                # Convert the masked image to GFV
+                current_state = self.env.get_state(masked_input_batch)
+                done = False
                 
-            recons_batch = self.AE.decode_GFV(next_state)
+                 
+                while not done:
+                    # Action By Agent and collect reward
+                    action = self.DDPG.select_action(current_state)
+                    next_state, reward, done = self.env(current_state, action)
+                    
+                
+                recons_batch = self.AE.decode_GFV(next_state)
             
             imgs.append((masked_input_batch+1)/2)
             imgs.append((recons_batch+1)/2)
-            imgs.append((gt_input_batch+1)/2)
+            # imgs.append((gt_input_batch+1)/2)
             
         
         self.writer.add_images('Image Reconstruction', torch.cat(imgs, dim=0), global_step=0)
